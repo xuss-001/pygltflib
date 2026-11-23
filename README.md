@@ -114,6 +114,31 @@ box = gltf.nodes[node_index]
 box.matrix  # will output vertices for the box object
 ```
 
+#### Sample an animation at a given time?
+Return each animated node's local translation, rotation (`[x, y, z, w]`) and
+scale at a time in seconds.  `STEP`, `LINEAR` and `CUBICSPLINE` interpolation
+are supported.  Properties without a channel keep their node values (or the
+glTF defaults), and times outside the keyframe range clamp to the nearest
+endpoint.
+
+```python
+from pygltflib import GLTF2
+
+gltf = GLTF2().load("glTF-Sample-Models/2.0/AnimatedCube/glTF/AnimatedCube.gltf")
+
+# Continuous sampling over the animation, including the endpoints.
+for time in (0.0, 0.25, 0.5, 0.75, 1.0):
+    transforms = gltf.sample_animation(0, time)
+    for node_index, transform in transforms.items():
+        print(node_index, transform.translation, transform.rotation, transform.scale)
+```
+
+The result is an `AnimationSample` mapping target node indices to
+`NodeTransform` objects.  Use `pygltflib.sample_animation(gltf, animation_index,
+time)` for the equivalent function form.  Unsupported channels (morph weights,
+extensions), duplicate node/property channels, and malformed keyframes raise an
+`AnimationSamplingError`.
+
 
 #### Create a mesh?
 Consult the longer examples in the second half of this document

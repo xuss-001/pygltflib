@@ -1,3 +1,8 @@
+* Unreleased:
+  * Add `GLTF2.sample_animation` / `pygltflib.sample_animation` to evaluate
+    node translation, rotation and scale animations with `STEP`, `LINEAR` and
+    `CUBICSPLINE` interpolation from GLB, data URI or local buffer data.
+
 * 1.15.1:
   * Dataclasses install only required on python 3.6.x (cherry-pick from Saeid Akbari branch)
   * Removed deprecated `AlphaMode` after two years (use the `pygltflib.BLEND`, `pygltflib.MASK`, `pygltflib.OPAQUE` constants directly)

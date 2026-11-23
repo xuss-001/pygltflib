@@ -47,6 +47,19 @@ from dataclasses_json.core import _decode_dataclass
 from dataclasses_json.core import _ExtendedEncoder as JsonEncoder
 
 from .types import *
+from .animation import (
+    AnimationSample,
+    NodeTransform,
+    AnimationSamplingError,
+    AnimationDataError,
+    InvalidAnimationError,
+    InvalidKeyframeError,
+    UnsupportedAnimationChannelError,
+    DuplicateAnimationChannelError,
+    get_animation_sample,
+    sample_animation,
+    sample_animation_at,
+)
 
 __version__ = "1.15.3"
 
@@ -91,6 +104,19 @@ class GLTF2(Property):
             (bytes): binary data
         """
         return getattr(self, "_glb_data", None)
+
+    def sample_animation(self, animation_index, time):
+        """
+        Sample local node transforms from an animation at ``time`` seconds.
+
+        Returns a mapping of target node index to an object with
+        ``translation``, ``rotation`` (``[x, y, z, w]``) and ``scale`` values.
+        See :func:`pygltflib.animation.sample_animation` for details.
+        """
+        return sample_animation(self, animation_index, time)
+
+    sample_animation_at = sample_animation
+    get_animation_sample = sample_animation
 
     def set_binary_blob(self, blob):
         setattr(self, "_glb_data", blob)
