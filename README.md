@@ -175,6 +175,29 @@ gltf.meshes[0].primitives[0].attributes._MYOTHERATTRIBUTE = 456
 gltf.remove_bufferView(0)  # this will update all accessors, images and sparse accessors to remove the first bufferView
 ```
 
+#### Read the values described by an accessor?
+```python
+from pygltflib import GLTF2
+
+gltf = GLTF2().load("model.glb")
+
+# One tuple-like element per accessor element. Matrices are returned in
+# glTF's column-major order.
+positions = gltf.get_accessor_data(position_accessor_index)
+print(positions[0])  # e.g. (1.0, 2.0, 3.0)
+
+# For an accessor with "normalized": true, request glTF-normalized floats.
+colors = gltf.get_accessor_data(color_accessor_index, normalized=True)
+
+# Data URIs, GLB embedded buffers and external .bin files are all supported.
+# Sparse overrides and interleaved byteStride layouts are handled for you.
+```
+The default keeps integer components as integers. Pass `normalized=True` to
+convert integers from accessors marked `normalized` to floats. Invalid accessor
+ranges, byte strides and sparse indices raise a `ValueError` (or `IndexError`
+for an unknown accessor index). Reading does not modify the GLTF object or its
+buffer files.
+
 #### Validate a gltf object?
 ```python
 from pygltflib import GLTF2

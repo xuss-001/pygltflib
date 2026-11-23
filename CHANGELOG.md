@@ -1,3 +1,9 @@
+* unreleased:
+  * add `GLTF2.get_accessor_data` (and package-level `get_accessor_data`) to read accessor values
+    * supports all glTF component and element types, interleaved strides, matrix column padding,
+      sparse accessors, GLB/data URI/external buffers and optional normalization of integer values
+    * validates bounds, strides and sparse indices without modifying the GLTF object or buffers
+
 * 1.15.1:
   * Dataclasses install only required on python 3.6.x (cherry-pick from Saeid Akbari branch)
   * Removed deprecated `AlphaMode` after two years (use the `pygltflib.BLEND`, `pygltflib.MASK`, `pygltflib.OPAQUE` constants directly)

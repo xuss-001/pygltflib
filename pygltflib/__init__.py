@@ -47,6 +47,21 @@ from dataclasses_json.core import _decode_dataclass
 from dataclasses_json.core import _ExtendedEncoder as JsonEncoder
 
 from .types import *
+from .accessor import (
+    AccessorBoundsError,
+    AccessorData,
+    AccessorDataError,
+    AccessorElement,
+    AccessorError,
+    AccessorIndexError,
+    AccessorSparseError,
+    AccessorSparseIndexError,
+    AccessorStrideError,
+    get_accessor_data,
+    get_accessor_values,
+    read_accessor,
+    read_accessor_data,
+)
 
 __version__ = "1.15.3"
 
@@ -98,6 +113,48 @@ class GLTF2(Property):
     def destroy_binary_blob(self):
         if hasattr(self, "_glb_data"):
             setattr(self, "_glb_data", None)
+
+    def get_accessor_data(self, accessor_index=None, normalized=False, **kwargs):
+        """
+        Read and return the values described by an accessor.
+
+        Args:
+            accessor_index (int): Index into ``self.accessors``. An
+                ``Accessor`` instance is also accepted.
+            normalized (bool): Convert integers from accessors marked
+                ``normalized`` to floats using the glTF rules. The default is
+                false, which keeps the stored integer values.
+
+        Returns:
+            AccessorData: One tuple-like element per accessor element. Matrix
+            components use glTF's column-major order.
+
+        This method does not modify the GLTF object, its buffers or files.
+        """
+        return get_accessor_data(
+            self,
+            accessor_index=accessor_index,
+            normalized=normalized,
+            **kwargs,
+        )
+
+    def read_accessor_data(self, accessor_index=None, normalized=False, **kwargs):
+        """Alias for :meth:`get_accessor_data`."""
+        return self.get_accessor_data(
+            accessor_index=accessor_index, normalized=normalized, **kwargs
+        )
+
+    def read_accessor(self, accessor_index=None, normalized=False, **kwargs):
+        """Alias for :meth:`get_accessor_data`."""
+        return self.get_accessor_data(
+            accessor_index=accessor_index, normalized=normalized, **kwargs
+        )
+
+    def get_accessor_values(self, accessor_index=None, normalized=False, **kwargs):
+        """Alias for :meth:`get_accessor_data`."""
+        return self.get_accessor_data(
+            accessor_index=accessor_index, normalized=normalized, **kwargs
+        )
 
     def load_file_uri(self, uri):
         """
