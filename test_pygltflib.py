@@ -14,11 +14,14 @@ pytest test_pygltflib.py::TextValidator
 """
 
 import base64
+import copy
 from dataclasses import dataclass
+import json
 import logging
 import os
 from pathlib import Path
 import shutil
+import struct
 import tempfile
 
 import pytest
@@ -880,24 +883,153 @@ class TestConvertImages:
 
 
 class TestBytesBuffer:
-    def test_buffer_blob_padding_underrun(self):
-        pass
-        """
-        buffer_blob += data[byte_offset:byte_offset + byte_length]
-        The problem is that byte_offset + byte_length is clamped to the actual size of data, so no padding is copied if data is at the end and buffer_blob is smaller than required.
-        Maybe it is further a good idea to explicitly use zeroes for padding instead of reading any unspecified data from data.
-        """
-        # filename = "glTF-Sample-Models/2.0/Box/glTF-Binary/Box.glb"
-        # gltf = GLTF2().load(filename)
-        # buffer_blob = gltf.buffers_to_binary_blob()
+    @staticmethod
+    def _split_glb(glb_bytes):
+        magic, version, length = struct.unpack("<4sII", glb_bytes[:12])
+        assert magic == b"glTF"
+        assert version == 2
+        assert length == len(glb_bytes)
 
-        # assert buffer_blob == gltf._glb_data
+        json_length, json_type = struct.unpack("<I4s", glb_bytes[12:20])
+        assert json_type == b"JSON"
+        assert json_length % 4 == 0
+        json_data = json.loads(glb_bytes[20 : 20 + json_length])
 
-    def test_buffer_view_byte_length(self):
-        #  it is better to use the unpadded size as length for the buffer view:
-        # https://gitlab.com/dodgyville/pygltflib/-/blob/87ec1eb2ee44e69c14c41114b69485bbc180005b/pygltflib/__init__.py#L986
-        #buffers_to_binary_blob
-        pass
+        bin_header = 20 + json_length
+        bin_length, bin_type = struct.unpack(
+            "<I4s", glb_bytes[bin_header : bin_header + 8]
+        )
+        assert bin_type == b"BIN\x00"
+        assert bin_length % 4 == 0
+        bin_data = glb_bytes[bin_header + 8 : bin_header + 8 + bin_length]
+        return json_data, bin_data
+
+    @staticmethod
+    def _view_data(gltf, view_index):
+        view = gltf.bufferViews[view_index]
+        return gltf.binary_blob()[view.byteOffset : view.byteOffset + view.byteLength]
+
+    @staticmethod
+    def _snapshot(gltf):
+        return {
+            "buffers": copy.deepcopy(gltf.buffers),
+            "bufferViews": copy.deepcopy(gltf.bufferViews),
+            "blob": gltf.binary_blob(),
+            "asset": copy.deepcopy(gltf.asset),
+            "path": getattr(gltf, "_path", None),
+        }
+
+    def test_buffer_blob_padding_underrun(self, tmp_path):
+        file_data = b"ABCDEFGHIJ"
+        data_uri_data = b"0123456789"
+        (tmp_path / "buffer.bin").write_bytes(file_data)
+        data_uri = (
+            "data:application/octet-stream;base64,"
+            + base64.b64encode(data_uri_data).decode("ascii")
+        )
+
+        gltf = GLTF2(
+            buffers=[
+                Buffer(uri="buffer.bin", byteLength=len(file_data)),
+                Buffer(uri=data_uri, byteLength=len(data_uri_data)),
+            ],
+            bufferViews=[
+                BufferView(buffer=0, byteOffset=0, byteLength=5),
+                BufferView(buffer=1, byteOffset=2, byteLength=7),
+                BufferView(buffer=0, byteOffset=3, byteLength=6),
+                BufferView(buffer=1, byteOffset=0, byteLength=3),
+            ],
+        )
+        gltf._path = tmp_path
+        snapshot = self._snapshot(gltf)
+
+        output = tmp_path / "mixed.glb"
+        assert gltf.save_binary(output)
+        assert self._snapshot(gltf) == snapshot
+
+        json_data, bin_data = self._split_glb(output.read_bytes())
+        assert json_data["buffers"][0]["byteLength"] == 27
+        assert [view["byteLength"] for view in json_data["bufferViews"]] == [
+            5,
+            7,
+            6,
+            3,
+        ]
+        assert all(view["byteOffset"] % 4 == 0 for view in json_data["bufferViews"])
+        assert all(view["buffer"] == 0 for view in json_data["bufferViews"])
+        for view in json_data["bufferViews"]:
+            end = view["byteOffset"] + view["byteLength"]
+            aligned_end = (end + 3) // 4 * 4
+            assert bin_data[end:aligned_end] == b"\x00" * (aligned_end - end)
+
+        reloaded = GLTF2().load(output)
+        assert self._view_data(reloaded, 0) == file_data[0:5]
+        assert self._view_data(reloaded, 1) == data_uri_data[2:9]
+        assert self._view_data(reloaded, 2) == file_data[3:9]
+        assert self._view_data(reloaded, 3) == data_uri_data[0:3]
+
+    def test_buffer_view_byte_length(self, tmp_path):
+        gltf = GLTF2(
+            buffers=[Buffer(byteLength=5)],
+            bufferViews=[BufferView(buffer=0, byteOffset=0, byteLength=5)],
+        )
+        gltf.set_binary_blob(b"abcde\x00\x00\x00")
+        snapshot = self._snapshot(gltf)
+
+        glb = b"".join(gltf.save_to_bytes())
+        assert self._snapshot(gltf) == snapshot
+
+        json_data, bin_data = self._split_glb(glb)
+        assert json_data["bufferViews"][0]["byteLength"] == 5
+        assert json_data["buffers"][0]["byteLength"] == 5
+        assert bin_data == b"abcde\x00\x00\x00"
+
+        reloaded = GLTF2.load_from_bytes(glb)
+        assert self._view_data(reloaded, 0) == b"abcde"
+
+        output = tmp_path / "bufferview.glb"
+        assert gltf.save(output)
+        assert self._snapshot(gltf) == snapshot
+        assert self._view_data(GLTF2().load(output), 0) == b"abcde"
+
+    def test_binary_save_errors_do_not_mutate_or_write_partial_glb(self, tmp_path):
+        data_uri = (
+            "data:application/octet-stream;base64,"
+            + base64.b64encode(b"0123456789").decode("ascii")
+        )
+        bad_gltfs = [
+            GLTF2(
+                buffers=[Buffer(uri=data_uri, byteLength=10)],
+                bufferViews=[
+                    BufferView(buffer=0, byteOffset=9, byteLength=2)
+                ],
+            ),
+            GLTF2(
+                buffers=[Buffer(uri="missing.bin", byteLength=1)],
+                bufferViews=[BufferView(buffer=0, byteLength=1)],
+            ),
+            GLTF2(
+                buffers=[Buffer(uri=data_uri, byteLength=11)],
+                bufferViews=[BufferView(buffer=0, byteLength=1)],
+            ),
+            GLTF2(
+                buffers=[Buffer(byteLength=1)],
+                bufferViews=[BufferView(buffer=0, byteLength=1)],
+            ),
+            GLTF2(
+                buffers=[Buffer(uri=data_uri, byteLength=10)],
+                bufferViews=[BufferView(buffer=1, byteLength=1)],
+            ),
+        ]
+
+        for index, gltf in enumerate(bad_gltfs):
+            gltf._path = tmp_path
+            snapshot = self._snapshot(gltf)
+            output = tmp_path / f"invalid-{index}.glb"
+            with pytest.raises((ValueError, FileNotFoundError)):
+                gltf.save_binary(output)
+            assert self._snapshot(gltf) == snapshot
+            assert not output.exists()
 
 
 class TestJSON:

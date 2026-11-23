@@ -34,8 +34,11 @@ from datetime import date, datetime
 from enum import Enum
 import json
 import mimetypes
+from numbers import Integral
+import os
 from pathlib import Path
 from shutil import copyfile
+import tempfile
 from typing import Any, Dict, List
 from typing import Callable, Optional, Tuple, TypeVar, Union
 from urllib.parse import unquote
@@ -113,9 +116,23 @@ class GLTF2(Property):
         """
         Decodes the binary portion of a data uri.
         """
-        data = uri.split(header or DATA_URI_HEADER)[1]
-        data = base64.decodebytes(bytes(data, "utf8"))
-        return data
+        if header is None:
+            if not uri.startswith("data:") or "," not in uri:
+                raise ValueError("Invalid data URI.")
+            metadata, encoded_data = uri.split(",", 1)
+            if ";base64" not in metadata.lower():
+                raise ValueError("Only base64-encoded data URIs are supported.")
+        else:
+            if header not in uri:
+                raise ValueError(
+                    f"Data URI does not contain the expected header {header!r}."
+                )
+            encoded_data = uri.split(header, 1)[1]
+
+        try:
+            return base64.b64decode(encoded_data, validate=True)
+        except Exception as exc:
+            raise ValueError("Invalid base64 data in data URI.") from exc
 
     def identify_uri(self, uri):
         """
@@ -533,8 +550,9 @@ class GLTF2(Property):
 
     def save_json(self, fname):
         path = Path(fname)
-        original_buffers = copy.deepcopy(self.buffers)
-        for i, buffer in enumerate(self.buffers):
+        json_gltf = copy.copy(self)
+        json_gltf.buffers = copy.deepcopy(self.buffers)
+        for i, buffer in enumerate(json_gltf.buffers):
             if buffer.uri is None:  # save glb_data as bin file
                 # update the buffer uri to point to our new local bin file
                 glb_data = self.binary_blob()
@@ -548,63 +566,186 @@ class GLTF2(Property):
                     warnings.warn(f"buffer {i} is empty: {buffer}")
 
         with open(path, "w") as f:
-            f.write(self.gltf_to_json())
+            f.write(json_gltf.gltf_to_json())
 
-        self.buffers = original_buffers  # restore buffers
         return True
 
-    def buffers_to_binary_blob(self):
-        """Flatten all buffers into a single buffer"""
-        buffer_blob = bytearray()
-
-        offset = 0
-        path = getattr(self, "_path", Path())
-        binary_blob: Optional[bytearray] = None
-
-        for i, bufferView in enumerate(self.bufferViews):
-            buffer = self.buffers[bufferView.buffer]
-            if buffer.uri is None:  # assume loaded from glb binary file
-                if binary_blob is None:
-                    binary_blob = self.binary_blob()
-                data = binary_blob
-            elif buffer.uri.startswith("data"):
-                data = self.decode_data_uri(buffer.uri)
-            elif Path(path, buffer.uri).is_file():
-                with open(Path(path, buffer.uri), "rb") as fb:
-                    data = fb.read()
-            else:
-                warnings.warn(
-                    f"Unable to save bufferView {buffer.uri[:20]} to glb, skipping. "
-                    "Please open an issue at https://gitlab.com/dodgyville/pygltflib/issues"
-                )
-                continue
-            byte_offset = (
-                bufferView.byteOffset if bufferView.byteOffset is not None else 0
+    def _load_buffer_data(self, buffer_index):
+        if not isinstance(buffer_index, Integral) or isinstance(buffer_index, bool):
+            raise ValueError(f"Invalid buffer index {buffer_index!r}.")
+        buffer_index = int(buffer_index)
+        if buffer_index < 0 or buffer_index >= len(self.buffers):
+            raise ValueError(
+                f"Buffer index {buffer_index} does not exist; "
+                f"the glTF contains {len(self.buffers)} buffer(s)."
             )
-            byte_length = bufferView.byteLength
-            if byte_length % 4 != 0:  # pad each segment of binary blob
-                byte_length += 4 - byte_length % 4
 
-            buffer_blob += data[byte_offset : byte_offset + byte_length]
+        buffer = self.buffers[buffer_index]
+        if buffer is None:
+            raise ValueError(f"Buffer {buffer_index} is empty.")
+        uri = buffer.uri
 
-            bufferView.byteOffset = offset
-            bufferView.byteLength = byte_length
-            bufferView.buffer = 0
-            offset += byte_length
+        if uri is None:
+            data = self.binary_blob()
+            source = "GLB binary blob"
+            if data is None:
+                raise ValueError(
+                    f"Buffer {buffer_index} has no URI and no GLB binary blob is available."
+                )
+        elif isinstance(uri, str) and uri.startswith("data:"):
+            source = "data URI"
+            try:
+                data = self.decode_data_uri(uri)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Unable to decode data URI for buffer {buffer_index}: {exc}"
+                ) from exc
+        elif isinstance(uri, str):
+            path = getattr(self, "_path", Path())
+            buffer_path = Path(path, unquote(uri))
+            source = str(buffer_path)
+            if not buffer_path.is_file():
+                raise FileNotFoundError(
+                    f"Buffer {buffer_index} source file not found: {buffer_path}"
+                )
+            with open(buffer_path, "rb") as fb:
+                data = fb.read()
+        else:
+            raise ValueError(
+                f"Buffer {buffer_index} has an unsupported URI type "
+                f"{type(uri).__name__}."
+            )
 
+        try:
+            data = bytes(data)
+        except Exception as exc:
+            raise ValueError(
+                f"Buffer {buffer_index} source {source} is not binary data."
+            ) from exc
+
+        declared_length = buffer.byteLength
+        if declared_length is None:
+            declared_length = len(data)
+        elif (
+            not isinstance(declared_length, Integral)
+            or isinstance(declared_length, bool)
+            or declared_length < 0
+        ):
+            raise ValueError(
+                f"Buffer {buffer_index} has invalid byteLength {declared_length!r}."
+            )
+        else:
+            declared_length = int(declared_length)
+
+        if len(data) < declared_length:
+            raise ValueError(
+                f"Buffer {buffer_index} byteLength is {declared_length}, but its "
+                f"source {source} contains only {len(data)} bytes."
+            )
+
+        padding_length = len(data) - declared_length
+        if padding_length:
+            if padding_length > 3 or any(data[declared_length:]):
+                raise ValueError(
+                    f"Buffer {buffer_index} byteLength is {declared_length}, but its "
+                    f"source {source} contains {len(data)} bytes. At most three "
+                    "zero-padding bytes are allowed."
+                )
+
+        return data[:declared_length]
+
+    def _build_binary_blob(self):
+        """Build a GLB BIN blob and remapped buffer views without changing self."""
+        buffer_blob = bytearray()
+        buffer_views = copy.deepcopy(self.bufferViews)
+        buffer_data_cache = {}
+
+        for view_index, (buffer_view, new_buffer_view) in enumerate(
+            zip(self.bufferViews, buffer_views)
+        ):
+            if buffer_view is None:
+                raise ValueError(f"bufferView {view_index} is empty.")
+
+            buffer_index = buffer_view.buffer
+            if not isinstance(buffer_index, Integral) or isinstance(buffer_index, bool):
+                raise ValueError(
+                    f"bufferView {view_index} has invalid buffer index "
+                    f"{buffer_index!r}."
+                )
+            buffer_index = int(buffer_index)
+            if buffer_index not in buffer_data_cache:
+                buffer_data_cache[buffer_index] = self._load_buffer_data(buffer_index)
+            data = buffer_data_cache[buffer_index]
+
+            byte_offset = buffer_view.byteOffset
+            if byte_offset is None:
+                byte_offset = 0
+            if (
+                not isinstance(byte_offset, Integral)
+                or isinstance(byte_offset, bool)
+                or byte_offset < 0
+            ):
+                raise ValueError(
+                    f"bufferView {view_index} has invalid byteOffset "
+                    f"{byte_offset!r}."
+                )
+            byte_offset = int(byte_offset)
+
+            byte_length = buffer_view.byteLength
+            if (
+                not isinstance(byte_length, Integral)
+                or isinstance(byte_length, bool)
+                or byte_length < 0
+            ):
+                raise ValueError(
+                    f"bufferView {view_index} has invalid byteLength "
+                    f"{byte_length!r}."
+                )
+            byte_length = int(byte_length)
+
+            byte_end = byte_offset + byte_length
+            if byte_end > len(data):
+                raise ValueError(
+                    f"bufferView {view_index} is out of bounds: byteOffset "
+                    f"{byte_offset} + byteLength {byte_length} exceeds buffer "
+                    f"{buffer_index} data length {len(data)}."
+                )
+
+            padding_length = (-len(buffer_blob)) % 4
+            if padding_length:
+                buffer_blob.extend(b"\x00" * padding_length)
+
+            new_buffer_view.buffer = 0
+            new_buffer_view.byteOffset = len(buffer_blob)
+            new_buffer_view.byteLength = byte_length
+            buffer_blob.extend(data[byte_offset:byte_end])
+
+        buffer_byte_length = max(
+            (
+                view.byteOffset + view.byteLength
+                for view in buffer_views
+                if view is not None
+            ),
+            default=0,
+        )
+        padding_length = (-len(buffer_blob)) % 4
+        if padding_length:
+            buffer_blob.extend(b"\x00" * padding_length)
+
+        return buffer_blob, buffer_views, buffer_byte_length
+
+    def buffers_to_binary_blob(self):
+        """Flatten all buffers into a single 4-byte aligned buffer."""
+        buffer_blob, _, _ = self._build_binary_blob()
         return buffer_blob
 
     def save_to_bytes(self):
-        # setup
-        original_buffer_views = copy.deepcopy(self.bufferViews)
-        original_buffers = copy.deepcopy(self.buffers)
-        new_buffer = Buffer()
+        buffer_blob, buffer_views, buffer_byte_length = self._build_binary_blob()
 
-        buffer_blob = self.buffers_to_binary_blob()
-        new_buffer.byteLength = len(buffer_blob)
-
-        self.buffers = [new_buffer]
-        json_blob = self.gltf_to_json(separators=(",", ":"), indent=None).encode(
+        json_gltf = copy.copy(self)
+        json_gltf.buffers = [Buffer(byteLength=buffer_byte_length)]
+        json_gltf.bufferViews = buffer_views
+        json_blob = json_gltf.gltf_to_json(separators=(",", ":"), indent=None).encode(
             "utf-8"
         )
 
@@ -623,9 +764,6 @@ class GLTF2(Property):
             + len(buffer_blob)
         )
 
-        self.bufferViews = original_buffer_views  # restore unpacked bufferViews
-        self.buffers = original_buffers  # restore unpacked buffers
-
         # header is MAGIC, version, length
         # json chunk is json_blob length, JSON, json_blob
         # buffer chunk is length of buffer_blob, utf-8, buffer_blob
@@ -642,28 +780,47 @@ class GLTF2(Property):
         ]
 
     def save_binary(self, fname):
-        with open(fname, "wb") as f:
-            glb_structure = self.save_to_bytes()
-            if not glb_structure:
-                return False
-            for data in glb_structure:
-                f.write(data)
+        glb_structure = self.save_to_bytes()
+        if not glb_structure:
+            return False
+
+        path = Path(fname)
+        temp_path = None
+        try:
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+            )
+            temp_path = Path(temp_name)
+            with os.fdopen(fd, "wb") as f:
+                for data in glb_structure:
+                    f.write(data)
+            os.replace(temp_path, path)
+        except BaseException:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink()
+                except FileNotFoundError:
+                    pass
+            raise
         return True
 
     def save(self, fname, asset=Asset()):
-        self.asset = asset
-        self._path = Path(fname).parent
-        self._name = Path(fname).name
-        ext = Path(fname).suffix
+        path = Path(fname)
+        save_gltf = copy.copy(self)
+        save_gltf.buffers = copy.deepcopy(self.buffers)
+        save_gltf.asset = asset
+        save_gltf._path = path.parent
+        save_gltf._name = path.name
+        ext = path.suffix
         if ext.lower() in [".glb"]:
-            return self.save_binary(fname)
+            return save_gltf.save_binary(fname)
         else:
             if getattr(self, "_glb_data", None):
                 warnings.warn(
                     f"This file ({fname}) contains a binary blob loaded from a .glb file, "
                     "and this will be saved to a .bin file next to the json file."
                 )
-            return self.save_json(fname)
+            return save_gltf.save_json(fname)
 
     @classmethod
     def gltf_from_json(cls, json_data):
