@@ -21,6 +21,7 @@ It supports the entire specification, including materials and animations. Main f
     * [Load a binary GLB file?](#load-a-binary-glb-file)
     * [Load a binary file with an unusual extension?](#load-a-binary-file-with-an-unusual-extension)
     * [Access the first node (the objects comprising the scene) of a scene?](#access-the-first-node-the-objects-comprising-the-scene-of-a-scene)
+    * [Traverse a scene and move node subtrees?](#traverse-a-scene-and-move-node-subtrees)
     * [Create a mesh?](#create-a-mesh)
     * [Convert buffers to GLB binary buffers?](#convert-buffers-to-glb-binary-buffers)
     * [Convert buffer to data uri (embedded) buffer?](#convert-buffer-to-data-uri-embedded-buffer)
@@ -113,6 +114,36 @@ node_index = current_scene.nodes[0]  # scene.nodes is the indices, not the objec
 box = gltf.nodes[node_index]
 box.matrix  # will output vertices for the box object
 ```
+
+#### Traverse a scene and move node subtrees?
+
+`traverse_scene` walks only nodes reachable from the requested scene. It keeps
+root and child order, returns each node's ancestor path, and computes local and
+world matrices using glTF's column-major `matrix` convention and its
+`translation * rotation * scale` TRS convention.
+
+`reparent_node` returns a deep copy whose node subtree is moved below a new
+parent (or made a scene root when the parent is `None`). The world transform of
+the moved subtree and all other nodes is preserved. The input asset is not
+modified.
+
+```python
+for item in gltf.traverse_scene(scene_index=0):
+    print(item.index, item.path, item.local_matrix, item.world_matrix)
+
+adjusted = gltf.reparent_node(
+    node_index=2,
+    new_parent_index=4,
+    scene_index=0,
+)
+rooted = gltf.reparent_node(node_index=2, new_parent_index=None)
+```
+
+Hierarchy editing requires a single-scene asset without animation or skinning.
+It raises `NonInvertibleParentError` for a singular destination parent and
+`ShearError` when preserving world transforms would require shear. Cycles,
+multiple parents, invalid indices, and simultaneous `matrix` plus TRS
+properties are rejected.
 
 
 #### Create a mesh?

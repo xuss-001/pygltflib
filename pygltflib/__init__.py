@@ -47,6 +47,27 @@ from dataclasses_json.core import _decode_dataclass
 from dataclasses_json.core import _ExtendedEncoder as JsonEncoder
 
 from .types import *
+from .scene import (
+    InvalidNodeIndexError,
+    InvalidSceneIndexError,
+    InvalidTransformError,
+    Matrix4,
+    MatrixTRSConflictError,
+    MultipleParentsError,
+    NodeIndexPath,
+    NodeTransform,
+    NonInvertibleParentError,
+    ReparentUnsupportedError,
+    SceneGraphCycleError,
+    SceneGraphError,
+    ShearError,
+    get_scene_hierarchy,
+    get_scene_node_transforms,
+    move_node,
+    reparent_node,
+    reparent_node_subtree,
+    traverse_scene,
+)
 
 __version__ = "1.15.3"
 
@@ -91,6 +112,56 @@ class GLTF2(Property):
             (bytes): binary data
         """
         return getattr(self, "_glb_data", None)
+
+    def traverse_scene(self, scene_index=None, **kwargs):
+        """Return node transforms for all nodes reachable from a scene.
+
+        Each result contains the node index, its ancestor index path, its local
+        matrix, and its world matrix.  The asset is not modified.
+        """
+
+        return traverse_scene(self, scene_index, **kwargs)
+
+    def get_scene_node_transforms(self, scene_index=None, **kwargs):
+        """Alias for :meth:`traverse_scene`."""
+
+        return traverse_scene(self, scene_index, **kwargs)
+
+    def get_scene_hierarchy(self, scene_index=None, **kwargs):
+        """Alias for :meth:`traverse_scene`."""
+
+        return traverse_scene(self, scene_index, **kwargs)
+
+    def reparent_node(
+        self, node_index=None, new_parent_index=None, scene_index=None, **kwargs
+    ):
+        """Return a copy with a node subtree attached below a new parent.
+
+        Passing ``None`` as ``new_parent_index`` makes the node a scene root.
+        World transforms are preserved and the original asset is unchanged.
+        """
+
+        return reparent_node(
+            self, node_index, new_parent_index, scene_index, **kwargs
+        )
+
+    def reparent_node_subtree(
+        self, node_index=None, new_parent_index=None, scene_index=None, **kwargs
+    ):
+        """Alias for :meth:`reparent_node`."""
+
+        return reparent_node(
+            self, node_index, new_parent_index, scene_index, **kwargs
+        )
+
+    def move_node(
+        self, node_index=None, new_parent_index=None, scene_index=None, **kwargs
+    ):
+        """Alias for :meth:`reparent_node`."""
+
+        return reparent_node(
+            self, node_index, new_parent_index, scene_index, **kwargs
+        )
 
     def set_binary_blob(self, blob):
         setattr(self, "_glb_data", blob)
