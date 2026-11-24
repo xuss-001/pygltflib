@@ -20,6 +20,7 @@ It supports the entire specification, including materials and animations. Main f
     * [Load a file?](#load-a-file)
     * [Load a binary GLB file?](#load-a-binary-glb-file)
     * [Load a binary file with an unusual extension?](#load-a-binary-file-with-an-unusual-extension)
+    * [Merge scenes from several glTF files?](#merge-scenes-from-several-gltf-files)
     * [Access the first node (the objects comprising the scene) of a scene?](#access-the-first-node-the-objects-comprising-the-scene-of-a-scene)
     * [Create a mesh?](#create-a-mesh)
     * [Convert buffers to GLB binary buffers?](#convert-buffers-to-glb-binary-buffers)
@@ -102,6 +103,56 @@ glb = GLTF2().load(glb_filename)  # load method auto detects based on extension
 ```python
 glb = GLTF2().load_binary("BinaryGLTF.glk")   # load_json and load_binary helper methods
 ```
+
+#### Merge scenes from several glTF files?
+
+`merge_scenes` selects one scene from each input and combines them under a new
+root node per input. Each root can have its own translation, quaternion
+rotation, and scale. The result uses one scene, copies every resource (without
+mixing same-named resources between inputs), flattens buffers, and embeds URI
+images so it can be saved as a GLB.
+
+```python
+from pygltflib import GLTF2, MergeScene, merge_scenes
+
+first = GLTF2().load("props/first/model.gltf")
+second = GLTF2().load("props/second/model.gltf")
+
+merged = merge_scenes(
+    [
+        MergeScene(
+            first,
+            scene=1,
+            translation=[1.0, 0.0, 0.0],
+            rotation=[0.0, 0.0, 0.0, 1.0],
+            scale=[1.0, 1.0, 1.0],
+            name="first prop",
+        ),
+        MergeScene(
+            second,
+            scene=0,
+            translation=[-1.0, 0.0, 0.0],
+            rotation=[0.0, 0.0, 0.0, 1.0],
+            scale=[2.0, 2.0, 2.0],
+            name="second prop",
+        ),
+    ],
+    scene_name="combined props",
+)
+merged.save("merged_scene.glb")
+```
+
+Inputs may also be file paths or `GLTF2` objects. Scene selection and transforms
+can alternatively be supplied with the parallel `scene_indices`, `translations`,
+`rotations`, and `scales` arguments, or with one `transforms` entry per input
+(a mapping or a `(translation, rotation, scale)` tuple). Paths for external
+buffers and images are resolved relative to each input file. Source objects and
+files are not modified.
+
+Only static meshes are supported. Inputs containing animations, skins, morph
+targets, cameras, extensions, or invalid references raise `MergeError`.
+See `examples/merge_scenes_demo.py` for a runnable two-directory example with
+same-named resources.
 
 
 #### Access the first node (the objects comprising the scene) of a scene?

@@ -487,6 +487,7 @@ class Node(Property):
     matrix: Optional[List[float]] = None
     camera: Optional[int] = None
     name: Optional[str] = None
+    weights: Optional[List[float]] = None
 
 
 @dataclass_json

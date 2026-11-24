@@ -737,6 +737,21 @@ class GLTF2(Property):
         obj._name = path.name
         return obj
 
+    @classmethod
+    def merge_scenes(cls, inputs, **kwargs):
+        """Merge selected scenes into a new GLTF2 object.
+
+        See :func:`pygltflib.merge_scenes` for the accepted input forms.
+        """
+        from .merge import merge_scenes
+
+        return merge_scenes(inputs, **kwargs)
+
+    @classmethod
+    def merge(cls, inputs, **kwargs):
+        """Alias for :meth:`merge_scenes`."""
+        return cls.merge_scenes(inputs, **kwargs)
+
 
 def main():
     import doctest
@@ -772,3 +787,13 @@ def image_get_bytes(image: Image, gltf: GLTF2, path):
         return gltf.decode_data_uri(
             image.uri, image.uri[: image.uri.find("base64,") + 7]
         )
+
+
+from .merge import (  # noqa: E402
+    MergeError,
+    MergeInput,
+    MergeScene,
+    SceneMergeInput,
+    merge_gltf_scenes,
+    merge_scenes,
+)
