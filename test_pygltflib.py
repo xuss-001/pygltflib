@@ -14,11 +14,13 @@ pytest test_pygltflib.py::TextValidator
 """
 
 import base64
+import copy
 from dataclasses import dataclass
 import logging
 import os
 from pathlib import Path
 import shutil
+import struct
 import tempfile
 
 import pytest
@@ -26,15 +28,20 @@ import pytest
 import pygltflib
 from pygltflib import (
     ARRAY_BUFFER,
+    BYTE,
     ELEMENT_ARRAY_BUFFER,
     FLOAT,
     SCALAR,
+    SHORT,
     UNSIGNED_BYTE,
     UNSIGNED_INT,
     UNSIGNED_SHORT,
     VEC3,
+    VEC4,
     Accessor,
+    AccessorDataError,
     AccessorSparseIndices,
+    AccessorSparseValues,
     Attributes,
     Buffer,
     BufferFormat,
@@ -979,4 +986,426 @@ class TestExamples:
         with tempfile.TemporaryDirectory() as tmpdirname:
             gltf.save("triangle.gltf")
 
+
+class TestAccessorReplacement:
+    @staticmethod
+    def _gltf_from_bytes(raw_data, buffer_views, accessors):
+        encoded = base64.b64encode(raw_data).decode("ascii")
+        return GLTF2(
+            buffers=[
+                Buffer(
+                    uri=(
+                        "data:application/octet-stream;base64,"
+                        + encoded
+                    ),
+                    byteLength=len(raw_data),
+                )
+            ],
+            bufferViews=buffer_views,
+            accessors=accessors,
+        )
+
+    @staticmethod
+    def _buffer_bytes(gltf, buffer_index=0):
+        return gltf.get_data_from_buffer_uri(gltf.buffers[buffer_index].uri)
+
+    @staticmethod
+    def _read_accessor(gltf, accessor_index, fmt):
+        accessor = gltf.accessors[accessor_index]
+        buffer_view = gltf.bufferViews[accessor.bufferView]
+        data = TestAccessorReplacement._buffer_bytes(gltf, buffer_view.buffer)
+        stride = buffer_view.byteStride or struct.calcsize(fmt)
+        start = (buffer_view.byteOffset or 0) + (accessor.byteOffset or 0)
+        values = []
+        for index in range(accessor.count):
+            offset = start + index * stride
+            values.append(
+                list(
+                    struct.unpack(
+                        "<" + fmt,
+                        data[offset : offset + struct.calcsize(fmt)],
+                    )
+                )
+            )
+        if accessor.sparse is not None:
+            indices_view = gltf.bufferViews[accessor.sparse.indices.bufferView]
+            index_size = {
+                UNSIGNED_BYTE: 1,
+                UNSIGNED_SHORT: 2,
+                UNSIGNED_INT: 4,
+            }[accessor.sparse.indices.componentType]
+            index_fmt = {
+                UNSIGNED_BYTE: "B",
+                UNSIGNED_SHORT: "H",
+                UNSIGNED_INT: "I",
+            }[accessor.sparse.indices.componentType]
+            index_start = (
+                (indices_view.byteOffset or 0)
+                + (accessor.sparse.indices.byteOffset or 0)
+            )
+            sparse_indices = []
+            for index in range(accessor.sparse.count):
+                offset = index_start + index * index_size
+                sparse_indices.append(
+                    struct.unpack(
+                        "<" + index_fmt, data[offset : offset + index_size]
+                    )[0]
+                )
+            values_view = gltf.bufferViews[accessor.sparse.values.bufferView]
+            value_start = (
+                (values_view.byteOffset or 0)
+                + (accessor.sparse.values.byteOffset or 0)
+            )
+            element_size = struct.calcsize(fmt)
+            value_stride = values_view.byteStride or element_size
+            for sparse_order, sparse_index in enumerate(sparse_indices):
+                offset = value_start + sparse_order * value_stride
+                values[sparse_index] = list(
+                    struct.unpack(
+                        "<" + fmt, data[offset : offset + element_size]
+                    )
+                )
+        return values
+
+    def test_replaces_interleaved_attribute_without_changing_other_attributes(self):
+        raw_data = (
+            struct.pack("<fffBBBB", 0.0, 0.0, 0.0, 1, 2, 3, 4)
+            + struct.pack("<fffBBBB", 1.0, 2.0, 3.0, 5, 6, 7, 8)
+        )
+        gltf = self._gltf_from_bytes(
+            raw_data,
+            [
+                BufferView(
+                    buffer=0,
+                    byteLength=len(raw_data),
+                    byteStride=16,
+                    target=ARRAY_BUFFER,
+                )
+            ],
+            [
+                Accessor(
+                    bufferView=0,
+                    byteOffset=0,
+                    componentType=FLOAT,
+                    count=2,
+                    type=VEC3,
+                ),
+                Accessor(
+                    bufferView=0,
+                    byteOffset=12,
+                    componentType=UNSIGNED_BYTE,
+                    count=2,
+                    type=VEC4,
+                ),
+            ],
+        )
+        gltf.meshes = [
+            Mesh(
+                primitives=[
+                    Primitive(attributes=Attributes(POSITION=0, COLOR_0=1)),
+                    Primitive(attributes=Attributes(POSITION=0, COLOR_0=1)),
+                ]
+            )
+        ]
+
+        gltf.replace_accessor_data(0, [[4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+
+        assert len(gltf.bufferViews) == 1
+        assert gltf.accessors[0].bufferView == 0
+        assert gltf.accessors[0].min == [4.0, 5.0, 6.0]
+        assert gltf.accessors[0].max == [7.0, 8.0, 9.0]
+        assert self._read_accessor(gltf, 0, "fff") == [
+            [4.0, 5.0, 6.0],
+            [7.0, 8.0, 9.0],
+        ]
+        assert self._read_accessor(gltf, 1, "BBBB") == [
+            [1, 2, 3, 4],
+            [5, 6, 7, 8],
+        ]
+        for primitive in gltf.meshes[0].primitives:
+            assert primitive.attributes.POSITION == 0
+            assert primitive.attributes.COLOR_0 == 1
+
+    def test_overlapping_storage_is_relocated_and_shared_accessor_is_reused(self):
+        raw_data = struct.pack("<ffffff", 1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+        gltf = self._gltf_from_bytes(
+            raw_data,
+            [BufferView(buffer=0, byteLength=len(raw_data))],
+            [
+                Accessor(
+                    bufferView=0,
+                    componentType=FLOAT,
+                    count=2,
+                    type=VEC3,
+                ),
+                Accessor(
+                    bufferView=0,
+                    componentType=FLOAT,
+                    count=2,
+                    type=VEC3,
+                ),
+            ],
+        )
+        gltf.meshes = [
+            Mesh(
+                primitives=[
+                    Primitive(attributes=Attributes(POSITION=0)),
+                    Primitive(attributes=Attributes(POSITION=0)),
+                ]
+            )
+        ]
+
+        gltf.replace_accessor_data(0, [[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]])
+
+        assert len(gltf.bufferViews) == 2
+        assert gltf.accessors[0].bufferView == 1
+        assert gltf.accessors[1].bufferView == 0
+        assert self._read_accessor(gltf, 0, "fff") == [
+            [10.0, 20.0, 30.0],
+            [40.0, 50.0, 60.0],
+        ]
+        assert self._read_accessor(gltf, 1, "fff") == [
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+        ]
+        assert self._buffer_bytes(gltf)[: len(raw_data)] == raw_data
+        for primitive in gltf.meshes[0].primitives:
+            assert primitive.attributes.POSITION == 0
+
+    def test_normalized_integer_input_uses_normalized_values(self):
+        raw_data = b"\x00" * 12
+        gltf = self._gltf_from_bytes(
+            raw_data,
+            [BufferView(buffer=0, byteLength=len(raw_data))],
+            [
+                Accessor(
+                    bufferView=0,
+                    componentType=UNSIGNED_BYTE,
+                    normalized=True,
+                    count=3,
+                    type=VEC4,
+                )
+            ],
+        )
+        gltf.replace_accessor_data(
+            0,
+            [
+                [0.0, 0.0, 0.0, 0.0],
+                [1.0, 1.0, 1.0, 1.0],
+                [0.5, 0.5, 0.5, 0.5],
+            ],
+        )
+
+        data = self._buffer_bytes(gltf)
+        assert data == b"\x00\x00\x00\x00\xff\xff\xff\xff\x80\x80\x80\x80"
+        assert gltf.accessors[0].min == [0.0, 0.0, 0.0, 0.0]
+        assert gltf.accessors[0].max == [255, 255, 255, 255]
+
+    @pytest.mark.parametrize(
+        "component_type,values,fmt",
+        [
+            (UNSIGNED_BYTE, [0, 255], "BB"),
+            (BYTE, [-128, 127], "bb"),
+            (UNSIGNED_SHORT, [0, 65535], "HH"),
+            (SHORT, [-32768, 32767], "hh"),
+            (UNSIGNED_INT, [0, 4294967295], "II"),
+        ],
+    )
+    def test_integer_component_boundaries_are_written(
+        self, component_type, values, fmt
+    ):
+        raw_data = b"\x00" * struct.calcsize(fmt)
+        gltf = self._gltf_from_bytes(
+            raw_data,
+            [BufferView(buffer=0, byteLength=len(raw_data))],
+            [
+                Accessor(
+                    bufferView=0,
+                    componentType=component_type,
+                    count=2,
+                    type=SCALAR,
+                )
+            ],
+        )
+
+        gltf.replace_accessor_data(0, values)
+
+        assert struct.unpack("<" + fmt, self._buffer_bytes(gltf)) == tuple(values)
+        assert gltf.accessors[0].min == [min(values)]
+        assert gltf.accessors[0].max == [max(values)]
+
+    def test_sparse_overrides_are_replaced(self):
+        raw_data = (
+            struct.pack("<HHHH", 10, 20, 30, 40)
+            + struct.pack("<HH", 1, 3)
+            + struct.pack("<HH", 20, 40)
+        )
+        gltf = self._gltf_from_bytes(
+            raw_data,
+            [
+                BufferView(buffer=0, byteLength=8),
+                BufferView(buffer=0, byteOffset=8, byteLength=4),
+                BufferView(buffer=0, byteOffset=12, byteLength=4),
+            ],
+            [
+                Accessor(
+                    bufferView=0,
+                    componentType=UNSIGNED_SHORT,
+                    count=4,
+                    type=SCALAR,
+                    sparse=Sparse(
+                        count=2,
+                        indices=AccessorSparseIndices(
+                            bufferView=1, componentType=UNSIGNED_SHORT
+                        ),
+                        values=AccessorSparseValues(bufferView=2),
+                    ),
+                )
+            ],
+        )
+
+        gltf.replace_accessor_data(0, [1, 2, 3, 4])
+
+        assert self._read_accessor(gltf, 0, "H") == [[1], [2], [3], [4]]
+        assert gltf.accessors[0].sparse is not None
+        assert self._buffer_bytes(gltf)[12:16] == struct.pack("<HH", 2, 4)
+        assert gltf.accessors[0].min == [1]
+        assert gltf.accessors[0].max == [4]
+
+    def test_binary_blob_storage_is_replaced(self):
+        raw_data = struct.pack("<ffffff", 1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+        gltf = GLTF2(
+            buffers=[Buffer(byteLength=len(raw_data))],
+            bufferViews=[BufferView(buffer=0, byteLength=len(raw_data))],
+            accessors=[
+                Accessor(
+                    bufferView=0,
+                    componentType=FLOAT,
+                    count=2,
+                    type=VEC3,
+                )
+            ],
+        )
+        gltf.set_binary_blob(raw_data)
+
+        gltf.replace_accessor_data(0, [[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]])
+
+        assert gltf.binary_blob() == struct.pack(
+            "<ffffff", 7.0, 8.0, 9.0, 10.0, 11.0, 12.0
+        )
+        assert gltf.buffers[0].byteLength == 24
+        assert self._read_accessor(gltf, 0, "fff") == [
+            [7.0, 8.0, 9.0],
+            [10.0, 11.0, 12.0],
+        ]
+
+    def test_invalid_input_or_references_leave_object_unchanged(self):
+        raw_data = struct.pack("<ffffff", 1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+        gltf = self._gltf_from_bytes(
+            raw_data,
+            [BufferView(buffer=0, byteLength=len(raw_data))],
+            [
+                Accessor(
+                    bufferView=0,
+                    componentType=FLOAT,
+                    count=2,
+                    type=VEC3,
+                )
+            ],
+        )
+
+        original = copy.deepcopy(gltf)
+        original_data = self._buffer_bytes(gltf)
+        with pytest.raises(AccessorDataError):
+            gltf.replace_accessor_data(0, [[1.0, 2.0, 3.0]])
+        assert gltf == original
+        assert self._buffer_bytes(gltf) == original_data
+        with pytest.raises(AccessorDataError):
+            gltf.replace_accessor_data(0, [[1.0, 2.0], [3.0, 4.0]])
+        assert gltf == original
+        assert self._buffer_bytes(gltf) == original_data
+        with pytest.raises(AccessorDataError):
+            gltf.replace_accessor_data(
+                0, [[1.0, 2.0, 3.0], [4.0, 5.0, float("nan")]]
+            )
+        assert gltf == original
+        assert self._buffer_bytes(gltf) == original_data
+
+        gltf.accessors[0].bufferView = 99
+        malformed = copy.deepcopy(gltf)
+        malformed_data = self._buffer_bytes(gltf)
+        with pytest.raises(AccessorDataError, match="bufferView"):
+            gltf.replace_accessor_data(0, [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        assert gltf == malformed
+        assert self._buffer_bytes(gltf) == malformed_data
+
+    def test_integer_out_of_range_is_rejected(self):
+        raw_data = b"\x00\x00"
+        gltf = self._gltf_from_bytes(
+            raw_data,
+            [BufferView(buffer=0, byteLength=len(raw_data))],
+            [
+                Accessor(
+                    bufferView=0,
+                    componentType=UNSIGNED_BYTE,
+                    count=2,
+                    type=SCALAR,
+                )
+            ],
+        )
+        original = copy.deepcopy(gltf)
+        original_data = self._buffer_bytes(gltf)
+
+        with pytest.raises(AccessorDataError, match="representable range"):
+            gltf.replace_accessor_data(0, [0, 256])
+        assert gltf == original
+        assert self._buffer_bytes(gltf) == original_data
+
+        normalized = copy.deepcopy(gltf)
+        normalized.accessors[0].normalized = True
+        normalized_original = copy.deepcopy(normalized)
+        normalized_data = self._buffer_bytes(normalized)
+        with pytest.raises(AccessorDataError, match="normalized value"):
+            normalized.replace_accessor_data(0, [0.0, 1.01])
+        assert normalized == normalized_original
+        assert self._buffer_bytes(normalized) == normalized_data
+
+    def test_invalid_sparse_reference_leaves_object_unchanged(self):
+        raw_data = (
+            struct.pack("<HH", 1, 2)
+            + struct.pack("<H", 5)
+            + struct.pack("<H", 9)
+        )
+        gltf = self._gltf_from_bytes(
+            raw_data,
+            [
+                BufferView(buffer=0, byteLength=4),
+                BufferView(buffer=0, byteOffset=4, byteLength=2),
+                BufferView(buffer=0, byteOffset=6, byteLength=2),
+            ],
+            [
+                Accessor(
+                    bufferView=0,
+                    componentType=UNSIGNED_SHORT,
+                    count=2,
+                    type=SCALAR,
+                    sparse=Sparse(
+                        count=1,
+                        indices=AccessorSparseIndices(
+                            bufferView=1, componentType=UNSIGNED_SHORT
+                        ),
+                        values=AccessorSparseValues(bufferView=2),
+                    ),
+                )
+            ],
+        )
+        original = copy.deepcopy(gltf)
+        original_data = self._buffer_bytes(gltf)
+
+        with pytest.raises(
+            AccessorDataError, match="outside accessor count"
+        ):
+            gltf.replace_accessor_data(0, [3, 4])
+        assert gltf == original
+        assert self._buffer_bytes(gltf) == original_data
 

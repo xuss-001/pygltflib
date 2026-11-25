@@ -29,6 +29,7 @@ It supports the entire specification, including materials and animations. Main f
     * [Access an extension?](#access-an-extension)
     * [Add a custom attribute to Attributes?](#add-a-custom-attribute-to-attributes)
     * [Remove a bufferView?](#remove-a-bufferview)
+    * [Replace accessor data?](#replace-accessor-data)
     * [Validate a gltf object?](#validate-a-gltf-object)
     * [Convert texture images inside a GLTF file to their own PNG files?](#convert-texture-images-inside-a-gltf-file-to-their-own-png-files)
     * [Convert texture images from a GLTF file to their own PNG files using custom file names?](#convert-texture-images-from-a-gltf-file-to-their-own-png-files-using-custom-file-names)
@@ -174,6 +175,38 @@ gltf.meshes[0].primitives[0].attributes._MYOTHERATTRIBUTE = 456
 ```python
 gltf.remove_bufferView(0)  # this will update all accessors, images and sparse accessors to remove the first bufferView
 ```
+
+#### Replace accessor data?
+Use the accessor index from `gltf.accessors`. The input shape must be
+`(accessor.count, component_count)`; SCALAR accessors also accept a flat list.
+The replacement respects the accessor byte offset and interleaved buffer stride,
+updates the accessor's `min` and `max`, and keeps sparse overrides consistent.
+Other accessors are left unchanged, including accessors that reference
+overlapping storage.
+
+```python
+from pygltflib import GLTF2
+
+gltf = GLTF2().load("model.gltf")
+primitive = gltf.meshes[0].primitives[0]
+
+# POSITION is VEC3 FLOAT, count=4
+new_positions = [
+    [0.0, 0.0, 0.0],
+    [1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 0.0, 1.0],
+]
+gltf.replace_accessor_data(primitive.attributes.POSITION, new_positions)
+
+# COLOR_0 is VEC4 UNSIGNED_BYTE with normalized=True. Pass normalized values
+# in [0, 1] (or [-1, 1] for signed integer component types), not raw bytes.
+new_colors = [[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0]]
+gltf.replace_accessor_data(primitive.attributes.COLOR_0, new_colors)
+```
+
+Invalid input shape, out-of-range values and invalid buffer/sparse references
+raise `AccessorDataError` before changing the GLTF object or its binary data.
 
 #### Validate a gltf object?
 ```python
