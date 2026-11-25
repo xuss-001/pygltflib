@@ -14,11 +14,13 @@ pytest test_pygltflib.py::TextValidator
 """
 
 import base64
+import copy
 from dataclasses import dataclass
 import logging
 import os
 from pathlib import Path
 import shutil
+import struct
 import tempfile
 
 import pytest
@@ -978,5 +980,435 @@ class TestExamples:
         # save to file
         with tempfile.TemporaryDirectory() as tmpdirname:
             gltf.save("triangle.gltf")
+
+
+_REORDER_PERMUTATION = [5, 2, 0, 4, 1, 3]
+_REORDER_INVERSE = [2, 4, 1, 5, 3, 0]
+_REORDER_POSITIONS = [
+    (0.0, 0.0, 0.0),
+    (1.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0),
+    (2.0, 0.0, 0.0),
+    (3.0, 0.0, 0.0),
+    (2.0, 1.0, 0.0),
+]
+_REORDER_COLORS = [
+    (1.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0),
+    (0.0, 0.0, 1.0),
+    (1.0, 1.0, 0.0),
+    (1.0, 0.0, 1.0),
+    (0.0, 1.0, 1.0),
+]
+_REORDER_UVS = [
+    (0.0, 0.0),
+    (1.0, 0.0),
+    (0.0, 1.0),
+    (0.5, 0.25),
+    (0.75, 0.5),
+    (0.25, 0.75),
+]
+_REORDER_MORPH_DELTAS = [
+    (0.0, 0.0, 0.0),
+    (0.1, 0.0, 0.0),
+    (0.0, 0.1, 0.0),
+    (0.0, 0.0, 0.1),
+    (0.1, 0.1, 0.0),
+    (0.0, 0.1, 0.1),
+]
+
+_INDEX_FORMATS = {
+    UNSIGNED_BYTE: "B",
+    UNSIGNED_SHORT: "H",
+    UNSIGNED_INT: "I",
+}
+
+
+def _make_reorder_fixture(
+    index_component_type=UNSIGNED_SHORT,
+    indexed=True,
+    add_unselected_mesh=False,
+    add_second_primitive=False,
+    mode=4,
+    indices=None,
+):
+    vertex_data = bytearray()
+    for position, color, uv in zip(
+        _REORDER_POSITIONS, _REORDER_COLORS, _REORDER_UVS
+    ):
+        vertex_data.extend(struct.pack("<3f3f2f", *(position + color + uv)))
+
+    morph_data = b"".join(
+        struct.pack("<3f", *delta) for delta in _REORDER_MORPH_DELTAS
+    )
+    vertex_view_length = len(vertex_data)
+    morph_offset = vertex_view_length
+    blob = bytearray(vertex_data + morph_data)
+
+    buffer_views = [
+        BufferView(
+            buffer=0,
+            byteOffset=0,
+            byteLength=vertex_view_length,
+            byteStride=32,
+            target=ARRAY_BUFFER,
+        ),
+        BufferView(
+            buffer=0,
+            byteOffset=morph_offset,
+            byteLength=len(morph_data),
+            target=ARRAY_BUFFER,
+        ),
+    ]
+    accessors = [
+        Accessor(
+            bufferView=0,
+            byteOffset=0,
+            componentType=FLOAT,
+            count=6,
+            type=VEC3,
+            min=[min(value[0] for value in _REORDER_POSITIONS),
+                 min(value[1] for value in _REORDER_POSITIONS),
+                 min(value[2] for value in _REORDER_POSITIONS)],
+            max=[max(value[0] for value in _REORDER_POSITIONS),
+                 max(value[1] for value in _REORDER_POSITIONS),
+                 max(value[2] for value in _REORDER_POSITIONS)],
+        ),
+        Accessor(
+            bufferView=0,
+            byteOffset=12,
+            componentType=FLOAT,
+            count=6,
+            type=VEC3,
+        ),
+        Accessor(
+            bufferView=0,
+            byteOffset=24,
+            componentType=FLOAT,
+            count=6,
+            type=pygltflib.VEC2,
+        ),
+        Accessor(
+            bufferView=1,
+            byteOffset=0,
+            componentType=FLOAT,
+            count=6,
+            type=VEC3,
+        ),
+    ]
+
+    index_accessor = None
+    if indexed:
+        if indices is None:
+            indices = list(range(6))
+        index_offset = (len(blob) + 3) // 4 * 4
+        blob.extend(b"\x00" * (index_offset - len(blob)))
+        index_format = _INDEX_FORMATS[index_component_type]
+        index_data = struct.pack(
+            "<{}{}".format(len(indices), index_format), *indices
+        )
+        blob.extend(index_data)
+        buffer_views.append(
+            BufferView(
+                buffer=0,
+                byteOffset=index_offset,
+                byteLength=len(index_data),
+                target=ELEMENT_ARRAY_BUFFER,
+            )
+        )
+        accessors.append(
+            Accessor(
+                bufferView=2,
+                byteOffset=0,
+                componentType=index_component_type,
+                count=len(indices),
+                type=SCALAR,
+                min=[min(indices)] if indices else [],
+                max=[max(indices)] if indices else [],
+            )
+        )
+        index_accessor = 4
+
+    primitive = Primitive(
+        attributes=Attributes(
+            POSITION=0,
+            COLOR_0=1,
+            TEXCOORD_0=2,
+        ),
+        indices=index_accessor,
+        mode=mode,
+        targets=[Attributes(POSITION=3)],
+    )
+    mesh = Mesh(primitives=[primitive])
+    if add_second_primitive:
+        mesh.primitives.append(copy.deepcopy(primitive))
+
+    buffer_uri = "data:application/octet-stream;base64," + base64.b64encode(
+        bytes(blob)
+    ).decode("ascii")
+    gltf = GLTF2(
+        buffers=[Buffer(uri=buffer_uri, byteLength=len(blob))],
+        bufferViews=buffer_views,
+        accessors=accessors,
+        meshes=[mesh],
+    )
+    if add_unselected_mesh:
+        gltf.meshes.append(copy.deepcopy(mesh))
+    return gltf
+
+
+def _buffer_bytes(gltf, buffer_index=0):
+    buffer = gltf.buffers[buffer_index]
+    if buffer.uri is None:
+        return gltf.binary_blob()
+    return gltf.get_data_from_buffer_uri(buffer.uri)
+
+
+def _read_accessor_values(gltf, accessor_index):
+    accessor = gltf.accessors[accessor_index]
+    buffer_view = gltf.bufferViews[accessor.bufferView]
+    component_format = {
+        pygltflib.BYTE: "b",
+        UNSIGNED_BYTE: "B",
+        pygltflib.SHORT: "h",
+        UNSIGNED_SHORT: "H",
+        UNSIGNED_INT: "I",
+        FLOAT: "f",
+    }[accessor.componentType]
+    component_count = {
+        SCALAR: 1,
+        pygltflib.VEC2: 2,
+        VEC3: 3,
+        pygltflib.VEC4: 4,
+    }[accessor.type]
+    element_size = struct.calcsize("<" + component_format * component_count)
+    stride = buffer_view.byteStride or element_size
+    start = (buffer_view.byteOffset or 0) + (accessor.byteOffset or 0)
+    data = _buffer_bytes(gltf)
+    unpack_format = "<" + component_format * component_count
+    return [
+        struct.unpack_from(unpack_format, data, start + index * stride)
+        for index in range(accessor.count)
+    ]
+
+
+def _snapshot(gltf):
+    return (
+        gltf.to_json(),
+        tuple(
+            bytes(_buffer_bytes(gltf, index))
+            for index in range(len(gltf.buffers))
+        ),
+    )
+
+
+def _triangle_cross(positions):
+    first = tuple(
+        positions[1][axis] - positions[0][axis] for axis in range(3)
+    )
+    second = tuple(
+        positions[2][axis] - positions[0][axis] for axis in range(3)
+    )
+    return (
+        first[1] * second[2] - first[2] * second[1],
+        first[2] * second[0] - first[0] * second[2],
+        first[0] * second[1] - first[1] * second[0],
+    )
+
+
+class TestVertexReordering:
+    def test_indexed_interleaved_attributes_and_morph_targets(self):
+        gltf = _make_reorder_fixture(add_second_primitive=True)
+
+        gltf.reorder_mesh_vertices(0, _REORDER_PERMUTATION)
+
+        primitive1, primitive2 = gltf.meshes[0].primitives
+        assert primitive1.attributes.POSITION == primitive2.attributes.POSITION
+        assert primitive1.attributes.COLOR_0 == primitive2.attributes.COLOR_0
+        assert primitive1.attributes.TEXCOORD_0 == primitive2.attributes.TEXCOORD_0
+        assert primitive1.targets[0].POSITION == primitive2.targets[0].POSITION
+
+        positions = _read_accessor_values(gltf, primitive1.attributes.POSITION)
+        colors = _read_accessor_values(gltf, primitive1.attributes.COLOR_0)
+        uvs = _read_accessor_values(gltf, primitive1.attributes.TEXCOORD_0)
+        morph = _read_accessor_values(gltf, primitive1.targets[0].POSITION)
+        for new_index, old_index in enumerate(_REORDER_PERMUTATION):
+            assert positions[new_index] == _REORDER_POSITIONS[old_index]
+            assert colors[new_index] == _REORDER_COLORS[old_index]
+            assert uvs[new_index] == _REORDER_UVS[old_index]
+            assert morph[new_index] == pytest.approx(
+                _REORDER_MORPH_DELTAS[old_index]
+            )
+
+        remapped_indices = [
+            value[0] for value in _read_accessor_values(gltf, primitive1.indices)
+        ]
+        assert remapped_indices == _REORDER_INVERSE
+        assert gltf.bufferViews[0].byteStride == 32
+
+    def test_unselected_mesh_sharing_accessors_is_untouched(self):
+        gltf = _make_reorder_fixture(add_unselected_mesh=True)
+        selected = gltf.meshes[0].primitives[0]
+        unselected = gltf.meshes[1].primitives[0]
+        original_accessors = (
+            selected.attributes.POSITION,
+            selected.attributes.COLOR_0,
+            selected.attributes.TEXCOORD_0,
+            selected.targets[0].POSITION,
+            selected.indices,
+        )
+        original_data = bytes(_buffer_bytes(gltf))
+
+        gltf.reorder_mesh_vertices(0, _REORDER_PERMUTATION)
+
+        assert selected.attributes.POSITION != original_accessors[0]
+        assert selected.attributes.COLOR_0 != original_accessors[1]
+        assert selected.attributes.TEXCOORD_0 != original_accessors[2]
+        assert selected.targets[0].POSITION != original_accessors[3]
+        assert selected.indices != original_accessors[4]
+        assert unselected.attributes.POSITION == original_accessors[0]
+        assert unselected.attributes.COLOR_0 == original_accessors[1]
+        assert unselected.attributes.TEXCOORD_0 == original_accessors[2]
+        assert unselected.targets[0].POSITION == original_accessors[3]
+        assert unselected.indices == original_accessors[4]
+
+        data = _buffer_bytes(gltf)
+        assert data[: len(original_data)] == original_data
+        unselected_positions = _read_accessor_values(
+            gltf, unselected.attributes.POSITION
+        )
+        assert unselected_positions == _REORDER_POSITIONS
+
+    def test_all_unsigned_index_types_are_remapped(self):
+        for component_type in _INDEX_FORMATS:
+            gltf = _make_reorder_fixture(index_component_type=component_type)
+
+            gltf.reorder_mesh_vertices(0, _REORDER_PERMUTATION)
+
+            primitive = gltf.meshes[0].primitives[0]
+            remapped_indices = [
+                value[0]
+                for value in _read_accessor_values(gltf, primitive.indices)
+            ]
+            assert remapped_indices == _REORDER_INVERSE
+            assert gltf.accessors[primitive.indices].componentType == component_type
+            assert gltf.accessors[primitive.indices].min == [0]
+            assert gltf.accessors[primitive.indices].max == [5]
+
+    def test_non_indexed_triangles_are_remapped(self):
+        gltf = _make_reorder_fixture(indexed=False)
+
+        gltf.reorder_mesh_vertices(0, _REORDER_PERMUTATION)
+
+        primitive = gltf.meshes[0].primitives[0]
+        assert primitive.indices is not None
+        generated_index_accessor = gltf.accessors[primitive.indices]
+        assert generated_index_accessor.componentType == UNSIGNED_BYTE
+        assert generated_index_accessor.count == 6
+        remapped_indices = [
+            value[0]
+            for value in _read_accessor_values(gltf, primitive.indices)
+        ]
+        assert remapped_indices == _REORDER_INVERSE
+        positions = _read_accessor_values(gltf, primitive.attributes.POSITION)
+        for new_index, old_index in enumerate(_REORDER_PERMUTATION):
+            assert positions[new_index] == _REORDER_POSITIONS[old_index]
+        drawn_positions = [
+            positions[index] for index in remapped_indices
+        ]
+        assert drawn_positions == _REORDER_POSITIONS
+
+    def test_glb_roundtrip_preserves_triangle_data_and_winding(self):
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            input_path = Path(tmpdirname) / "source.glb"
+            _make_reorder_fixture().save(input_path)
+            gltf = GLTF2().load(input_path)
+            original_primitive = gltf.meshes[0].primitives[0]
+            original_indices = [
+                value[0]
+                for value in _read_accessor_values(
+                    gltf, original_primitive.indices
+                )
+            ]
+            original_positions = _read_accessor_values(
+                gltf, original_primitive.attributes.POSITION
+            )
+            original_colors = _read_accessor_values(
+                gltf, original_primitive.attributes.COLOR_0
+            )
+            original_uvs = _read_accessor_values(
+                gltf, original_primitive.attributes.TEXCOORD_0
+            )
+
+            gltf.reorder_mesh_vertices(0, _REORDER_PERMUTATION)
+            output = Path(tmpdirname) / "reordered.glb"
+            gltf.save(output)
+            loaded = GLTF2().load(output)
+
+        primitive = loaded.meshes[0].primitives[0]
+        loaded_indices = [
+            value[0] for value in _read_accessor_values(loaded, primitive.indices)
+        ]
+        loaded_positions = _read_accessor_values(
+            loaded, primitive.attributes.POSITION
+        )
+        loaded_colors = _read_accessor_values(
+            loaded, primitive.attributes.COLOR_0
+        )
+        loaded_uvs = _read_accessor_values(
+            loaded, primitive.attributes.TEXCOORD_0
+        )
+
+        for triangle_start in range(0, len(original_indices), 3):
+            old_triangle = original_indices[triangle_start : triangle_start + 3]
+            new_triangle = loaded_indices[triangle_start : triangle_start + 3]
+            assert len(old_triangle) == len(new_triangle) == 3
+
+            old_positions = [original_positions[index] for index in old_triangle]
+            new_positions = [loaded_positions[index] for index in new_triangle]
+            assert new_positions == old_positions
+            assert [loaded_colors[index] for index in new_triangle] == [
+                original_colors[index] for index in old_triangle
+            ]
+            assert [loaded_uvs[index] for index in new_triangle] == [
+                original_uvs[index] for index in old_triangle
+            ]
+
+            old_cross = _triangle_cross(old_positions)
+            new_cross = _triangle_cross(new_positions)
+            assert new_cross == pytest.approx(old_cross)
+            assert new_cross != pytest.approx((0.0, 0.0, 0.0))
+
+    def test_validation_failures_leave_gltf_unchanged(self):
+        def duplicate_permutation(gltf):
+            return [0, 0, 1, 2, 3, 4]
+
+        def incomplete_permutation(gltf):
+            return [0, 1, 2, 3, 4]
+
+        def out_of_range_permutation(gltf):
+            return [0, 1, 2, 3, 4, 6]
+
+        def bad_index_value(gltf):
+            return _REORDER_PERMUTATION
+
+        cases = [
+            (_make_reorder_fixture(mode=pygltflib.POINTS), _REORDER_PERMUTATION),
+            (_make_reorder_fixture(), duplicate_permutation),
+            (_make_reorder_fixture(), incomplete_permutation),
+            (_make_reorder_fixture(), out_of_range_permutation),
+            (_make_reorder_fixture(indices=[0, 1, 6, 2, 3, 4]), bad_index_value),
+        ]
+        inconsistent_counts = _make_reorder_fixture()
+        inconsistent_counts.accessors[1].count = 5
+        cases.append((inconsistent_counts, _REORDER_PERMUTATION))
+
+        for gltf, permutation in cases:
+            before = _snapshot(gltf)
+            with pytest.raises(ValueError):
+                if callable(permutation):
+                    permutation = permutation(gltf)
+                gltf.reorder_mesh_vertices(0, permutation)
+            assert _snapshot(gltf) == before
 
 

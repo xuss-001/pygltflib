@@ -47,6 +47,7 @@ from dataclasses_json.core import _decode_dataclass
 from dataclasses_json.core import _ExtendedEncoder as JsonEncoder
 
 from .types import *
+from .reorder import reorder_mesh_vertices
 
 __version__ = "1.15.3"
 
@@ -664,6 +665,39 @@ class GLTF2(Property):
                     "and this will be saved to a .bin file next to the json file."
                 )
             return self.save_json(fname)
+
+    def reorder_mesh_vertices(
+        self, mesh_indices=None, permutation=None, **kwargs
+    ):
+        """Reorder vertices in one or more meshes without changing triangles.
+
+        ``permutation[i]`` is the original vertex index that should occupy new
+        vertex position ``i``.  The permutation must contain every vertex index
+        exactly once.  Vertex attributes, morph targets and triangle indices are
+        updated together.
+
+        Args:
+            mesh_indices (int | Iterable[int]): Mesh index or indices to reorder.
+            permutation (Iterable[int]): Complete duplicate-free vertex order.
+
+        Returns:
+            GLTF2: This object, after the reorder has been committed.
+        """
+        if mesh_indices is None and "mesh_index" in kwargs:
+            mesh_indices = kwargs.pop("mesh_index")
+        if kwargs:
+            raise TypeError(
+                "Unexpected keyword arguments: {}".format(
+                    ", ".join(sorted(kwargs))
+                )
+            )
+        if mesh_indices is None or permutation is None:
+            raise ValueError("mesh_indices and permutation are required")
+        return reorder_mesh_vertices(self, mesh_indices, permutation)
+
+    def reorder_vertices(self, mesh_indices=None, permutation=None, **kwargs):
+        """Alias for :meth:`reorder_mesh_vertices`."""
+        return self.reorder_mesh_vertices(mesh_indices, permutation, **kwargs)
 
     @classmethod
     def gltf_from_json(cls, json_data):

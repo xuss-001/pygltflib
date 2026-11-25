@@ -34,6 +34,11 @@ from . import *
 
 # some higher level helper functions
 
+
+def reorder_mesh_vertices(gltf, mesh_indices=None, permutation=None, **kwargs):
+    """Reorder selected mesh vertices, preserving triangles and winding."""
+    return gltf.reorder_mesh_vertices(mesh_indices, permutation, **kwargs)
+
 def add_node(gltf, node):
     warnings.warn("pygltf.utils.add_node is a provisional function and may not exist in future versions.")
     if gltf.scene is not None:

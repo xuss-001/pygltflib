@@ -22,6 +22,7 @@ It supports the entire specification, including materials and animations. Main f
     * [Load a binary file with an unusual extension?](#load-a-binary-file-with-an-unusual-extension)
     * [Access the first node (the objects comprising the scene) of a scene?](#access-the-first-node-the-objects-comprising-the-scene-of-a-scene)
     * [Create a mesh?](#create-a-mesh)
+    * [Reorder mesh vertices without changing triangles?](#reorder-mesh-vertices-without-changing-triangles)
     * [Convert buffers to GLB binary buffers?](#convert-buffers-to-glb-binary-buffers)
     * [Convert buffer to data uri (embedded) buffer?](#convert-buffer-to-data-uri-embedded-buffer)
     * [Convert buffers to binary file (external) buffers?](#convert-buffers-to-binary-file-external-buffers)
@@ -120,6 +121,32 @@ Consult the longer examples in the second half of this document
   * [A simple mesh](#a-simple-mesh)
   * [Reading vertex data from a primitive and/or getting bounding sphere](#reading-vertex-data-from-a-primitive-andor-getting-bounding-sphere)
   * [Create a mesh, convert to bytes, convert back to mesh](#create-a-mesh-convert-to-bytes-convert-back-to-mesh)
+
+#### Reorder mesh vertices without changing triangles?
+
+`GLTF2.reorder_mesh_vertices` reorders vertex attributes, morph targets and
+triangle indices together. The permutation lists the old vertex index stored at
+each new vertex position, so it must contain every vertex index exactly once.
+Only `TRIANGLES` primitives are supported. Indexed and non-indexed primitives
+are both accepted; non-indexed primitives receive a generated index accessor so
+their triangles and winding stay unchanged.
+
+```python
+gltf.reorder_mesh_vertices(
+    mesh_indices=[0, 2],
+    permutation=[3, 1, 0, 2, 4],
+)
+gltf.save("reordered.glb")
+```
+
+Shared accessors used by multiple selected primitives are reordered once.
+Accessors that are also used by an unselected mesh are copied before reordering,
+so the unselected mesh remains untouched. Validation failures raise `ValueError`
+without modifying the GLTF object.
+
+See `examples/reorder_mesh_vertices.py` for a complete runnable example that
+creates an interleaved indexed mesh, reorders it, saves a GLB, reloads it, and
+compares position, color, texture coordinate and winding for every triangle.
 
 
 #### Convert buffers to glb binary buffers?
