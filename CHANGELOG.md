@@ -1,3 +1,7 @@
+* Unreleased:
+  * Add scene traversal with local and world matrices.
+  * Add non-mutating subtree reparenting that preserves world transforms.
+
 * 1.15.1:
   * Dataclasses install only required on python 3.6.x (cherry-pick from Saeid Akbari branch)
   * Removed deprecated `AlphaMode` after two years (use the `pygltflib.BLEND`, `pygltflib.MASK`, `pygltflib.OPAQUE` constants directly)

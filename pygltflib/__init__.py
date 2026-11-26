@@ -99,6 +99,62 @@ class GLTF2(Property):
         if hasattr(self, "_glb_data"):
             setattr(self, "_glb_data", None)
 
+    def traverse_scene(self, scene_index=None):
+        """Return world-space transform information for a scene's nodes."""
+
+        from .scene import traverse_scene
+
+        return traverse_scene(self, scene_index)
+
+    def get_scene_node_transforms(self, scene_index=None):
+        """Alias for :meth:`traverse_scene`."""
+
+        return self.traverse_scene(scene_index)
+
+    def get_scene_transforms(self, scene_index=None):
+        """Alias for :meth:`traverse_scene`."""
+
+        return self.traverse_scene(scene_index)
+
+    def reparent_node(
+        self, node_index, new_parent_index=None, *, scene_index=None, parent_index=None
+    ):
+        """Return a copy with a node's subtree moved to another parent."""
+
+        from .scene import reparent_node
+
+        return reparent_node(
+            self,
+            node_index,
+            new_parent_index,
+            scene_index=scene_index,
+            parent_index=parent_index,
+        )
+
+    def move_node(
+        self, node_index, new_parent_index=None, *, scene_index=None, parent_index=None
+    ):
+        """Alias for :meth:`reparent_node`."""
+
+        return self.reparent_node(
+            node_index,
+            new_parent_index,
+            scene_index=scene_index,
+            parent_index=parent_index,
+        )
+
+    def reparent_subtree(
+        self, node_index, new_parent_index=None, *, scene_index=None, parent_index=None
+    ):
+        """Alias for :meth:`reparent_node`."""
+
+        return self.reparent_node(
+            node_index,
+            new_parent_index,
+            scene_index=scene_index,
+            parent_index=parent_index,
+        )
+
     def load_file_uri(self, uri):
         """
         Loads a file pointed to by a uri
@@ -772,3 +828,26 @@ def image_get_bytes(image: Image, gltf: GLTF2, path):
         return gltf.decode_data_uri(
             image.uri, image.uri[: image.uri.find("base64,") + 7]
         )
+
+
+from .scene import (  # noqa: E402
+    InvalidNodeIndexError,
+    InvalidNodeTransformError,
+    InvalidSceneError,
+    NonInvertibleMatrixError,
+    SceneGraphError,
+    SceneGraphStructureError,
+    SceneNodeTransform,
+    ShearNotAllowedError,
+    UnsupportedAssetError,
+    get_scene_node_transforms,
+    get_scene_transforms,
+    move_node,
+    node_local_matrix,
+    reparent,
+    reparent_node,
+    reparent_subtree,
+    set_node_parent,
+    traverse_scene,
+    traverse_scene_nodes,
+)

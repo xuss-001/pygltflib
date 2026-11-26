@@ -21,6 +21,8 @@ It supports the entire specification, including materials and animations. Main f
     * [Load a binary GLB file?](#load-a-binary-glb-file)
     * [Load a binary file with an unusual extension?](#load-a-binary-file-with-an-unusual-extension)
     * [Access the first node (the objects comprising the scene) of a scene?](#access-the-first-node-the-objects-comprising-the-scene-of-a-scene)
+    * [Traverse a scene and query world transforms?](#traverse-a-scene-and-query-world-transforms)
+    * [Move a node and its subtree to another parent?](#move-a-node-and-its-subtree-to-another-parent)
     * [Create a mesh?](#create-a-mesh)
     * [Convert buffers to GLB binary buffers?](#convert-buffers-to-glb-binary-buffers)
     * [Convert buffer to data uri (embedded) buffer?](#convert-buffer-to-data-uri-embedded-buffer)
@@ -113,6 +115,50 @@ node_index = current_scene.nodes[0]  # scene.nodes is the indices, not the objec
 box = gltf.nodes[node_index]
 box.matrix  # will output vertices for the box object
 ```
+
+#### Traverse a scene and query world transforms?
+
+```python
+from pygltflib import GLTF2
+
+gltf = GLTF2().load("scene.gltf")
+
+for item in gltf.traverse_scene(0):
+    print(item.index)         # index into gltf.nodes
+    print(item.ancestors)     # scene root -> parent, excluding item.index
+    print(item.local_matrix)  # 4x4 nested list, row-major
+    print(item.world_matrix)  # 4x4 nested list, row-major
+
+# glTF's flattened column-major representation is also available:
+world_gltf = item.world_matrix_gltf
+```
+
+Traversal is depth-first pre-order and preserves `scene.nodes` and
+`node.children` order. Only nodes reachable from the requested scene are
+returned. Nodes shared by different scenes are allowed, but a cycle or a node
+with multiple parents inside the traversed scene raises a `SceneGraphError`.
+
+#### Move a node and its subtree to another parent?
+
+```python
+from pygltflib import reparent_node
+
+# Move node 4 (and all of its descendants) below node 2.
+adjusted = reparent_node(gltf, 4, new_parent_index=2)
+
+# Move node 4 to the scene root.
+rooted = gltf.reparent_node(4, None)
+
+# The input is unchanged; adjusted and rooted are independent deep copies.
+assert adjusted is not gltf
+assert rooted is not gltf
+```
+
+The moved subtree keeps exactly the same world transforms and all other nodes
+are unaffected. The operation supports assets with one scene and no
+animations or skins. It raises `NonInvertibleMatrixError` when the new
+parent's world matrix is singular and `ShearNotAllowedError` when the required
+local transform cannot be represented by glTF TRS values.
 
 
 #### Create a mesh?
