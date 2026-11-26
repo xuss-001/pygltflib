@@ -27,6 +27,7 @@ It supports the entire specification, including materials and animations. Main f
     * [Convert buffers to binary file (external) buffers?](#convert-buffers-to-binary-file-external-buffers)
     * [Convert a glb to a gltf file?](#convert-a-glb-to-a-gltf-file)
     * [Access an extension?](#access-an-extension)
+    * [Deduplicate equivalent materials?](#deduplicate-equivalent-materials)
     * [Add a custom attribute to Attributes?](#add-a-custom-attribute-to-attributes)
     * [Remove a bufferView?](#remove-a-bufferview)
     * [Validate a gltf object?](#validate-a-gltf-object)
@@ -160,6 +161,25 @@ gltf.meshes[0].primitives[0].extensions['KHR_draco_mesh_compression']
 gltf.materials[0].extensions['ADOBE_materials_thin_transparency']
 
 ```
+
+#### Deduplicate equivalent materials?
+```python
+from pygltflib import GLTF2, deduplicate_materials
+
+gltf = GLTF2().load("scene.gltf")
+cleaned, material_mapping = deduplicate_materials(gltf, remove_unused=True)
+
+# material_mapping maps each material index in the source document to its
+# index in cleaned.materials, or None if no equivalent material was retained.
+print(material_mapping)
+cleaned.save("scene-clean.gltf")
+```
+
+Equivalent materials are merged even when their names differ. Optional
+properties are compared using glTF's standard defaults, and textures are
+compared by texture index, material slot and texture transform. Materials that
+use unknown extensions are kept independent. The source `gltf` object is not
+modified.
 
 #### Add a custom attribute to Attributes?
 ```python

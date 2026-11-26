@@ -47,6 +47,7 @@ from dataclasses_json.core import _decode_dataclass
 from dataclasses_json.core import _ExtendedEncoder as JsonEncoder
 
 from .types import *
+from .materials import deduplicate_materials
 
 __version__ = "1.15.3"
 
@@ -94,6 +95,16 @@ class GLTF2(Property):
 
     def set_binary_blob(self, blob):
         setattr(self, "_glb_data", blob)
+
+    def deduplicate_materials(
+        self, remove_unused=False, *, remove_unused_materials=None
+    ):
+        """Return a copy with equivalent materials merged and remapped."""
+        return deduplicate_materials(
+            self,
+            remove_unused=remove_unused,
+            remove_unused_materials=remove_unused_materials,
+        )
 
     def destroy_binary_blob(self):
         if hasattr(self, "_glb_data"):
