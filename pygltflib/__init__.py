@@ -772,3 +772,70 @@ def image_get_bytes(image: Image, gltf: GLTF2, path):
         return gltf.decode_data_uri(
             image.uri, image.uri[: image.uri.find("base64,") + 7]
         )
+
+
+# ---------------------------------------------------------------------------
+# Merge functionality (see pygltflib/merger.py)
+# ---------------------------------------------------------------------------
+from .merger import (  # noqa: E402
+    GLTF2MergeMethod,
+    GltfMergeException,
+    InvalidInputError,
+    InvalidReferenceError,
+    InvalidGltfReferenceError,
+    MergeEntry,
+    MergeError,
+    MergeException,
+    MergeInput,
+    MergeValidationError,
+    Merger,
+    UnsupportedMergeError,
+    UnsupportedFeatureError,
+    UnsupportedGltfError,
+    UnsupportedGltfFeatureError,
+    GltfMergeError,
+    combine,
+    combine_gltf,
+    combine_gltfs,
+    merge,
+    merge_files,
+    merge_gltf,
+    merge_gltf_files,
+    merge_gltfs,
+    merge_into,
+    merge_models,
+    merge_scenes,
+    merge_to_file,
+    merge_to_glb,
+)
+from .merger import *  # noqa: E402,F401,F403
+
+# Attach method-style entry points so both ``GLTF2.merge([...])`` and
+# ``gltf.merge(other_gltf, ...)`` work.  Because ``merge_gltfs`` takes
+# variadic sources, bound instance methods naturally receive ``self`` first.
+_merge_method = GLTF2MergeMethod()
+for _merge_name in (
+    "merge",
+    "merge_gltfs",
+    "merge_gltf",
+    "merge_gltf_files",
+    "merge_gltf_scenes",
+    "merge_to_glb",
+    "merge_to_file",
+    "merge_files_to_glb",
+    "merge_scenes",
+    "merge_models",
+    "merge_files",
+    "merge_glb",
+    "merge_glbs",
+    "merge_props",
+    "combine",
+    "combine_gltf",
+    "combine_gltfs",
+    "combine_scenes",
+    "assemble_scene",
+):
+    setattr(GLTF2, _merge_name, _merge_method)
+GLTF2.Merger = Merger
+GLTF2.MergeInput = MergeInput
+GLTF2.MergeError = MergeError

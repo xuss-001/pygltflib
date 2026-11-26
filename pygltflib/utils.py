@@ -378,3 +378,24 @@ def glb2gltf(source, destination=None, override=False):
         GLTF2().load(str(path)).save_json(str(destination))
     return True
 
+
+# ---------------------------------------------------------------------------
+# Merging helpers (implementation in pygltflib.merger)
+# ---------------------------------------------------------------------------
+from .merger import (  # noqa: E402
+    InvalidInputError,
+    InvalidReferenceError,
+    MergeInput,
+    Merger,
+    UnsupportedGltfError,
+    combine_gltf,
+    combine_gltfs,
+    merge_gltf,
+    merge_gltfs,
+)
+
+# Common alternative naming requested by users looking for a merge entry point.
+merge = merge_gltfs
+merge_files = merge_gltfs
+merge_models = merge_gltfs
+

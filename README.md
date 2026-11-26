@@ -247,6 +247,43 @@ gltf.images[0].uri  # will now be something like "data:image/png;base64,iVBORw0K
 gltf.images[0].name  # will be myfile.png
 ```
 
+#### Merge several glTF props into one scene?
+
+`pygltflib.merge_gltfs` combines independent static props into a single
+`GLTF2` scene.  Each input can be a `GLTF2` object, a `.gltf`/`.glb` path or a
+descriptor dict.  Pick the scene per input and give a translation / rotation /
+scale that is applied to a dedicated wrapper root node.  Node hierarchies,
+meshes, materials, textures and images are copied with all indices shifted;
+resources are never de-duplicated by name across inputs while resources shared
+inside one input stay shared.  External buffers and images are resolved
+relative to each input file's directory and embedded when saving a GLB.
+
+```python
+from pygltflib import GLTF2, merge_gltfs, Merger
+
+merged = merge_gltfs(
+    "props/red/prop.gltf",
+    {"path": "props/blue/prop.gltf", "scene": 1},
+    translations=[[-2.0, 0.0, 0.0], [3.0, 0.0, 0.0]],
+    rotations=[None, [0.0, 0.0, 0.7071, 0.7071]],
+    scales=[None, [1.5, 1.5, 1.5]],
+)
+merged.save_binary("merged.glb")
+GLTF2.load("merged.glb")  # geometry, materials and textures survive
+
+# builder style
+merged = (Merger()
+          .add("a.glb", translation=[0, 0, 0])
+          .add(gltf_b, scene=1, scale=[2, 2, 2])
+          .merge(output="merged.glb"))
+```
+
+Only static meshes are supported: animations, skins, morph targets, cameras
+and glTF extensions raise `UnsupportedGltfError`; dangling indices raise
+`InvalidReferenceError`.  Input objects are deep-copied first, so a successful
+or failed merge never mutates the original glTF objects or their files.
+A runnable end-to-end demo lives in `demo_merge.py`.
+
 
 ### More Detailed Usage Below
 
